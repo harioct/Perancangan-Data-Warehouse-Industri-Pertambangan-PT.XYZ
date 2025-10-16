@@ -5,11 +5,13 @@ This script runs the complete ETL pipeline without Airflow dependencies
 """
 
 import pandas as pd
-import pymssql
-import logging
+import pyodbc
 import logging
 import time
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(
@@ -21,37 +23,69 @@ logging.basicConfig(
     ]
 )
 
+# --- START OF EDITS ---
+
 def get_sql_connection():
-    """Create SQL Server connection"""
+    """Create SQL Server connection using pyodbc"""
     try:
-        conn = pymssql.connect(
-            server='localhost',
-            port=1433,
-            database='PTXYZ_DataWarehouse',
-            user='sa',
-            password='PTXYZSecure123!',
-            timeout=30
+        # Mengambil password dari environment variable
+        load_dotenv()
+        db_password = os.getenv('MSSQL_SA_PASSWORD')
+        if not db_password:
+            raise ValueError("Password SQL Server tidak ditemukan di environment variable MSSQL_SA_PASSWORD")
+
+        conn_str = (
+            r'DRIVER={ODBC Driver 18 for SQL Server};'
+            r'SERVER=sqlserver,1433;'
+            r'DATABASE=PTXYZ_DataWarehouse;'
+            r'UID=sa;'
+            r'PWD=' + db_password + ';'
+            r'TrustServerCertificate=yes;'
         )
+
+        logging.info("Attempting to connect to SQL Server using pyodbc...")
+        conn = pyodbc.connect(conn_str)
+        logging.info("Connection to SQL Server successful!")
         return conn
     except Exception as e:
-        logging.error(f"Error connecting to SQL Server: {str(e)}")
+        logging.error(f"Error connecting to SQL Server with pyodbc: {str(e)}")
         raise
 
 def extract_and_load_to_staging():
     """Extract data from CSV files and load to staging tables"""
     try:
+        # Define the base path for data files to make it more robust
+        BASE_DATA_PATH = 'data'
+        
         conn = get_sql_connection()
         cursor = conn.cursor()
         
         # Clear staging tables
         logging.info("Clearing staging tables...")
         cursor.execute("TRUNCATE TABLE staging.EquipmentUsage")
-        cursor.execute("TRUNCATE TABLE staging.Production") 
+        cursor.execute("TRUNCATE TABLE staging.Production")
         cursor.execute("TRUNCATE TABLE staging.FinancialTransaction")
         
+        # Correct the paths to the CSV files
+        equipment_path = os.path.join(BASE_DATA_PATH, 'dataset_alat_berat_dw.csv')
+        production_path = os.path.join(BASE_DATA_PATH, 'dataset_production.csv')
+        transaction_path = os.path.join(BASE_DATA_PATH, 'dataset_transaksi.csv')
+
         # Load Equipment Usage data
-        logging.info("Loading Equipment Usage data...")
-        equipment_df = pd.read_csv('data/raw/Dataset/dataset_alat_berat_dw.csv')
+        logging.info(f"Loading Equipment Usage data from {equipment_path}...")
+        equipment_df = pd.read_csv(equipment_path)
+        
+# --- END OF EDITS (The rest of the file remains the same) ---
+# The logic below this point for processing the dataframes and executing SQL queries is unchanged.
+# Just ensure the other two pd.read_csv calls are also updated.
+
+        # Find and replace the other two pd.read_csv lines:
+        # old: production_df = pd.read_csv('data/raw/Dataset/dataset_production.csv')
+        # new: production_df = pd.read_csv(production_path)
+        # old: transaction_df = pd.read_csv('data/raw/Dataset/dataset_transaksi.csv')
+        # new: transaction_df = pd.read_csv(transaction_path)
+
+        # The rest of your original script follows...
         equipment_df['purchase_date'] = pd.to_datetime(equipment_df['purchase_date']).dt.date
         equipment_df['date'] = pd.to_datetime(equipment_df['date']).dt.date
         equipment_df['created_at'] = pd.to_datetime(equipment_df['created_at'])
@@ -65,8 +99,8 @@ def extract_and_load_to_staging():
                     equipment_type, manufacture, model, capacity, purchase_date,
                     operating_hours, downtime_hours, fuel_consumption, 
                     maintenance_cost, created_at, created_by
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """, tuple(row))
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, tuple(row))
             count += 1
             if count % 100 == 0:
                 logging.info(f"Loaded {count} equipment records...")
@@ -74,8 +108,8 @@ def extract_and_load_to_staging():
         logging.info(f"Loaded {count} equipment usage records")
         
         # Load Production data
-        logging.info("Loading Production data...")
-        production_df = pd.read_csv('data/raw/Dataset/dataset_production.csv')
+        logging.info(f"Loading Production data from {production_path}...")
+        production_df = pd.read_csv(production_path)
         production_df['date'] = pd.to_datetime(production_df['date']).dt.date
         production_df['hire_date'] = pd.to_datetime(production_df['hire_date']).dt.date
         
@@ -88,8 +122,8 @@ def extract_and_load_to_staging():
                     site_name, region, latitude, longitude, material_name, material_type,
                     unit_of_measure, quantity, employee_name, position, department,
                     status, hire_date, shift_name, start_time, end_time
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """, tuple(row))
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+""", tuple(row))
             count += 1
             if count % 100 == 0:
                 logging.info(f"Loaded {count} production records...")
@@ -97,8 +131,8 @@ def extract_and_load_to_staging():
         logging.info(f"Loaded {count} production records")
         
         # Load Financial Transaction data
-        logging.info("Loading Financial Transaction data...")
-        transaction_df = pd.read_csv('data/raw/Dataset/dataset_transaksi.csv')
+        logging.info(f"Loading Financial Transaction data from {transaction_path}...")
+        transaction_df = pd.read_csv(transaction_path)
         transaction_df['created_at'] = pd.to_datetime(transaction_df['created_at'])
         transaction_df['date'] = pd.to_datetime(transaction_df['date'], format='%Y%m%d').dt.date
         transaction_df['start_date'] = pd.to_datetime(transaction_df['start_date']).dt.date
@@ -113,7 +147,7 @@ def extract_and_load_to_staging():
                     day, day_name, month, year, site_name, region, latitude,
                     longitude, project_name, project_manager, status, start_date,
                     end_date, account_name, account_type, budget_category, cost
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, tuple(row))
             count += 1
             if count % 100 == 0:
@@ -130,7 +164,7 @@ def extract_and_load_to_staging():
     except Exception as e:
         logging.error(f"Error in staging load: {str(e)}")
         raise
-
+# ... (rest of your original file)
 def transform_and_load_dimensions():
     """Transform and load dimension tables"""
     try:
